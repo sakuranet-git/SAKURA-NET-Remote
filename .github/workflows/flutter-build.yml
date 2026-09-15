@@ -424,7 +424,7 @@ jobs:
             --component rustfmt \
             --profile minimal \
             --no-self-update
-          rustup default "$toolchain"
+          rustup default "$toolchain" --force-non-host
           echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
           echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
           rustc -vV
