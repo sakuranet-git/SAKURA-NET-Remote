@@ -452,6 +452,16 @@ jobs:
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
         shell: bash
 
+      - name: Use target-architecture libsodium
+        shell: bash
+        run: |
+          sodium_lib_dir="$VCPKG_ROOT/installed/${{ matrix.job.vcpkg-triplet }}/lib"
+          if [ ! -f "$sodium_lib_dir/libsodium.lib" ]; then
+            echo "Expected x86 libsodium archive is missing: $sodium_lib_dir/libsodium.lib" >&2
+            exit 1
+          fi
+          echo "SODIUM_LIB_DIR=$sodium_lib_dir" >> "$GITHUB_ENV"
+
       - name: Build rustdesk
         id: build
         shell: bash
