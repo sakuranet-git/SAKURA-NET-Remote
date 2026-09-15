@@ -408,18 +408,27 @@ jobs:
           submodules: recursive
 
       - name: Install LLVM and Clang
-        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce # no release tag; commit 2026-05-26
         with:
           version: ${{ env.LLVM_VERSION }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          # Install the host toolchain and cross-compile through the explicit target below.
-          # A target-qualified i686 toolchain no longer runs on the x64 GitHub runner.
-          toolchain: nightly-2023-10-13 # must use nightly here, because of abi_thiscall feature required
-          targets: ${{ matrix.job.target }}
-          components: "rustfmt"
+        shell: bash
+        run: |
+          # Build scripts for the i686 target must also run as i686 so native
+          # dependencies such as libclang and libsodium select their x86 builds.
+          toolchain="nightly-2023-10-13-${{ matrix.job.target }}"
+          rustup toolchain install "$toolchain" \
+            --force-non-host \
+            --target ${{ matrix.job.target }} \
+            --component rustfmt \
+            --profile minimal \
+            --no-self-update
+          rustup default "$toolchain"
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          rustc -vV
+          rustc -vV | grep -q '^host: ${{ matrix.job.target }}$'
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -451,16 +460,6 @@ jobs:
           fi
           head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
         shell: bash
-
-      - name: Use target-architecture libsodium
-        shell: bash
-        run: |
-          sodium_lib_dir="$VCPKG_ROOT/installed/${{ matrix.job.vcpkg-triplet }}/lib"
-          if [ ! -f "$sodium_lib_dir/libsodium.lib" ]; then
-            echo "Expected x86 libsodium archive is missing: $sodium_lib_dir/libsodium.lib" >&2
-            exit 1
-          fi
-          echo "SODIUM_LIB_DIR=$sodium_lib_dir" >> "$GITHUB_ENV"
 
       - name: Build rustdesk
         id: build
