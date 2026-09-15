@@ -408,7 +408,7 @@ jobs:
           submodules: recursive
 
       - name: Install LLVM and Clang
-        uses: rustdesk-org/install-llvm-action-32bit@6aa7d9ad3df84dff01cd4596dd0fc880a7f47fce # no release tag; commit 2026-05-26
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
         with:
           version: ${{ env.LLVM_VERSION }}
 
@@ -473,6 +473,24 @@ jobs:
           rm -rf ./usbmmidd_v2/deviceinstaller.exe ./usbmmidd_v2/usbmmidd.bat
           mv ./usbmmidd_v2 ./Release || true
 
+      - name: Validate Windows x86 executable architecture
+        shell: pwsh
+        run: |
+          $path = '.\Release\rustdesk.exe'
+          $stream = [System.IO.File]::OpenRead($path)
+          try {
+            $reader = New-Object System.IO.BinaryReader($stream)
+            $stream.Position = 0x3c
+            $peOffset = $reader.ReadInt32()
+            $stream.Position = $peOffset + 4
+            $machine = $reader.ReadUInt16()
+            if ($machine -ne 0x014c) {
+              throw "$path is not an Intel 386 PE image (machine=0x$($machine.ToString('X4')))."
+            }
+          } finally {
+            $stream.Dispose()
+          }
+
       - name: find Runner.res
         # Windows: find Runner.res (compiled from ./flutter/windows/runner/Runner.rc), copy to ./Runner.res
         # Runner.rc does not contain actual version, but Runner.res does
@@ -513,6 +531,24 @@ jobs:
           popd
           mkdir -p ./SignOutput
           mv ./target/${{ matrix.job.target }}/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe
+
+      - name: Validate Windows x86 portable architecture
+        shell: pwsh
+        run: |
+          $path = '.\SignOutput\rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe'
+          $stream = [System.IO.File]::OpenRead($path)
+          try {
+            $reader = New-Object System.IO.BinaryReader($stream)
+            $stream.Position = 0x3c
+            $peOffset = $reader.ReadInt32()
+            $stream.Position = $peOffset + 4
+            $machine = $reader.ReadUInt16()
+            if ($machine -ne 0x014c) {
+              throw "$path is not an Intel 386 PE image (machine=0x$($machine.ToString('X4')))."
+            }
+          } finally {
+            $stream.Dispose()
+          }
 
       - name: Sign rustdesk self-extracted file
         if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
