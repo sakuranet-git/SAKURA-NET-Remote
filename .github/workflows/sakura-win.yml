@@ -28,9 +28,18 @@ jobs:
   generate-bridge:
     uses: ./.github/workflows/bridge.yml
 
+  build-window-injection:
+    uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
+    with:
+      upload-artifact: true
+      target: windows-2022
+      configuration: Release
+      platform: x64
+      target_version: Windows10
+
   build-for-windows-flutter:
     name: ${{ matrix.job.target }}
-    needs: [generate-bridge]
+    needs: [build-window-injection, generate-bridge]
     runs-on: ${{ matrix.job.os }}
     strategy:
       fail-fast: false
@@ -130,6 +139,27 @@ jobs:
           python3 .\build.py --portable --hwcodec --flutter --vram --skip-portable-pack
           mv ./flutter/build/windows/x64/runner/Release ./rustdesk
           Move-Item -LiteralPath .\rustdesk\rustdesk.exe -Destination .\rustdesk\SAKURA-Remote.exe
+
+      - name: Add remote-printing adapter
+        shell: pwsh
+        run: |
+          $pinnedSha256 = "E90E5D52C8807B4C6293C78A52479338715E0BF396B1B34802777B8C452E6781"
+          Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip -OutFile printer_driver_adapter.zip
+          Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums -OutFile sha256sums
+          $manifestMatch = Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*printer_driver_adapter\.zip$'
+          if (-not $manifestMatch) { throw "Remote-printing adapter checksum is missing." }
+          $manifestSha256 = $manifestMatch.Matches.Groups[1].Value.ToUpperInvariant()
+          $actual = (Get-FileHash -Path printer_driver_adapter.zip -Algorithm SHA256).Hash
+          if ($pinnedSha256 -ne $actual) { throw "Remote-printing adapter does not match the repository-pinned checksum." }
+          if ($manifestSha256 -ne $actual) { throw "Remote-printing adapter does not match the upstream checksum manifest." }
+          Expand-Archive printer_driver_adapter.zip -DestinationPath .
+          Move-Item -Force .\printer_driver_adapter.dll .\rustdesk\printer_driver_adapter.dll
+
+      - name: Add privacy-mode component
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: topmostwindow-artifacts-x64
+          path: ./rustdesk
 
       - name: 接続不変条件ゲート (post-build)
         shell: pwsh

@@ -31,8 +31,12 @@ Assert-True ($runner -match 'LoadLibraryA\("SAKURA-Remote-Core\.dll"\)') `
     'Windows runner must load SAKURA-Remote-Core.dll'
 Assert-True ($nativeModel -match "isWindows\s*\?\s*DynamicLibrary\.open\('SAKURA-Remote-Core\.dll'\)") `
     'Flutter Windows FFI must load SAKURA-Remote-Core.dll'
-Assert-True ($workflow -notmatch 'usbmmidd_v2\.zip|printer_driver_v4|printer_driver_adapter\.zip') `
-    'Basic Windows workflow must not download external driver packages'
+Assert-True ($workflow -notmatch 'usbmmidd_v2\.zip|printer_driver_v4') `
+    'Windows workflow must not package external driver folders'
+Assert-True ($workflow -match 'printer_driver_adapter\.zip') `
+    'Windows workflow must restore the remote-printing adapter'
+Assert-True ($workflow -match 'topmostwindow-artifacts-x64') `
+    'Windows workflow must restore the privacy-mode component'
 Assert-True ($workflow -match 'SAKURA-Remote-basic-windows-\$\{\{ matrix\.job\.arch \}\}') `
     'CI artifact name must use only the SAKURA-Remote product name'
 Assert-True ($workflow -match 'Move-Item.*rustdesk\.exe.*SAKURA-Remote\.exe') `
@@ -47,10 +51,26 @@ if (-not [string]::IsNullOrWhiteSpace($ArtifactDir)) {
         'Artifact is missing SAKURA-Remote.exe'
     Assert-True (Test-Path -LiteralPath (Join-Path $ArtifactDir 'SAKURA-Remote-Core.dll')) `
         'Artifact is missing SAKURA-Remote-Core.dll'
+    Assert-True (Test-Path -LiteralPath (Join-Path $ArtifactDir 'printer_driver_adapter.dll')) `
+        'Artifact is missing the remote-printing adapter'
+    Assert-True (Test-Path -LiteralPath (Join-Path $ArtifactDir 'WindowInjection.dll')) `
+        'Artifact is missing the privacy-mode component'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $ArtifactDir 'drivers'))) `
         'Basic artifact must not contain printer drivers'
     Assert-True (-not (Test-Path -LiteralPath (Join-Path $ArtifactDir 'usbmmidd_v2'))) `
         'Basic artifact must not contain virtual-display drivers'
+
+    foreach ($component in @('printer_driver_adapter.dll', 'WindowInjection.dll')) {
+        $componentInfo = (Get-Item -LiteralPath (Join-Path $ArtifactDir $component)).VersionInfo
+        $visibleMetadata = @(
+            $componentInfo.CompanyName,
+            $componentInfo.ProductName,
+            $componentInfo.FileDescription,
+            $componentInfo.OriginalFilename
+        ) -join ' '
+        Assert-True ($visibleMetadata -notmatch '(?i)rustdesk|purslane') `
+            "$component exposes a forbidden customer-visible brand in VersionInfo"
+    }
 
     $mainInfo = (Get-Item -LiteralPath (Join-Path $ArtifactDir 'SAKURA-Remote.exe')).VersionInfo
     $coreInfo = (Get-Item -LiteralPath (Join-Path $ArtifactDir 'SAKURA-Remote-Core.dll')).VersionInfo
