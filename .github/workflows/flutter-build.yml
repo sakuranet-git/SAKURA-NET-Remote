@@ -413,11 +413,22 @@ jobs:
           version: ${{ env.LLVM_VERSION }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
-        with:
-          toolchain: nightly-2023-10-13-${{ matrix.job.target }} # must use nightly here, because of abi_thiscall feature required
-          targets: ${{ matrix.job.target }}
-          components: "rustfmt"
+        shell: bash
+        run: |
+          # Build scripts for the i686 target must also run as i686 so native
+          # dependencies such as libclang and libsodium select their x86 builds.
+          toolchain="nightly-2023-10-13-${{ matrix.job.target }}"
+          rustup toolchain install "$toolchain" \
+            --force-non-host \
+            --target ${{ matrix.job.target }} \
+            --component rustfmt \
+            --profile minimal \
+            --no-self-update
+          rustup default "$toolchain" --force-non-host
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+          echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+          rustc -vV
+          rustc -vV | grep -q '^host: ${{ matrix.job.target }}$'
 
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
         with:
@@ -458,9 +469,9 @@ jobs:
           # Patch sciter x86
           sed -i 's/branch = "dyn"/branch = "dyn_x86"/g' ./Cargo.toml
           cargo update -p sciter-rs --precise 674e07d3066ca9a92ced3816203ab6b652629d1e
-          cargo build --locked --features inline,vram,hwcodec --release --bins
+          cargo build --locked --features inline,vram,hwcodec --release --bins --target ${{ matrix.job.target }}
           mkdir -p ./Release
-          mv ./target/release/rustdesk.exe ./Release/rustdesk.exe
+          mv ./target/${{ matrix.job.target }}/release/rustdesk.exe ./Release/rustdesk.exe
           curl -LJ -o ./Release/sciter.dll https://github.com/c-smile/sciter-sdk/raw/master/bin.win/x32/sciter.dll
           echo "output_folder=./Release" >> $GITHUB_OUTPUT
           curl -LJ -o ./usbmmidd_v2.zip https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip
@@ -470,6 +481,24 @@ jobs:
           # we need the x64 exe to install and uninstall the driver.
           rm -rf ./usbmmidd_v2/deviceinstaller.exe ./usbmmidd_v2/usbmmidd.bat
           mv ./usbmmidd_v2 ./Release || true
+
+      - name: Validate Windows x86 executable architecture
+        shell: pwsh
+        run: |
+          $path = '.\Release\rustdesk.exe'
+          $stream = [System.IO.File]::OpenRead($path)
+          try {
+            $reader = New-Object System.IO.BinaryReader($stream)
+            $stream.Position = 0x3c
+            $peOffset = $reader.ReadInt32()
+            $stream.Position = $peOffset + 4
+            $machine = $reader.ReadUInt16()
+            if ($machine -ne 0x014c) {
+              throw "$path is not an Intel 386 PE image (machine=0x$($machine.ToString('X4')))."
+            }
+          } finally {
+            $stream.Dispose()
+          }
 
       - name: find Runner.res
         # Windows: find Runner.res (compiled from ./flutter/windows/runner/Runner.rc), copy to ./Runner.res
@@ -507,10 +536,28 @@ jobs:
           sed -i '/dpiAware/d' res/manifest.xml
           pushd ./libs/portable
           pip3 install -r requirements.txt
-          python3 ./generate.py -f ../../Release/ -o . -e ../../Release/rustdesk.exe
+          python3 ./generate.py -f ../../Release/ -o . -e ../../Release/rustdesk.exe -t ${{ matrix.job.target }}
           popd
           mkdir -p ./SignOutput
-          mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe
+          mv ./target/${{ matrix.job.target }}/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe
+
+      - name: Validate Windows x86 portable architecture
+        shell: pwsh
+        run: |
+          $path = '.\SignOutput\rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}-sciter.exe'
+          $stream = [System.IO.File]::OpenRead($path)
+          try {
+            $reader = New-Object System.IO.BinaryReader($stream)
+            $stream.Position = 0x3c
+            $peOffset = $reader.ReadInt32()
+            $stream.Position = $peOffset + 4
+            $machine = $reader.ReadUInt16()
+            if ($machine -ne 0x014c) {
+              throw "$path is not an Intel 386 PE image (machine=0x$($machine.ToString('X4')))."
+            }
+          } finally {
+            $stream.Dispose()
+          }
 
       - name: Sign rustdesk self-extracted file
         if: env.UPLOAD_ARTIFACT == 'true' && env.SIGN_BASE_URL != '-2'
