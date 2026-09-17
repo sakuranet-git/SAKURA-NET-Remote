@@ -28,6 +28,7 @@ jobs:
       - name: 検知 → tracking Issue → upstream-merge 自動起動
         env:
           GH_TOKEN: ${{ github.token }}
+          BOT: ${{ secrets.SAKURA_BOT_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -44,24 +45,82 @@ jobs:
 
           # 同一tagの tracking Issue が既にあれば「処理中/承認待ち」とみなし、再検知しても再dispatchしない
           # (毎日cronで同じ新版を再取り込みして重複ブランチ/ビルドが乱立するのを防ぐ・Codex指摘)
-          EXIST="$(gh issue list --repo "$GITHUB_REPOSITORY" --state all --label upstream-tracking --search "$LATEST in:title" --json number --jq 'length')"
+          EXIST="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label upstream-tracking --search "$LATEST in:title" --json number --jq 'length')"
           if [ "$EXIST" != "0" ]; then
             echo "既に $LATEST の tracking Issue あり(処理中/承認待ち/対応済)。再dispatchしない。"
             exit 0
           fi
 
-          # 初回検知のみ: tracking Issue 作成 → upstream-merge 自動起動
-          gh issue create --repo "$GITHUB_REPOSITORY" \
+          if [ -z "${BOT:-}" ]; then
+            echo "::error::SAKURA_BOT_TOKEN未設定のため管理リポジトリへ通知できません。upstream-mergeは起動しません。"
+            exit 1
+          fi
+
+          # 初回検知のみ: tracking Issue 作成 → 管理Repo通知 → upstream-merge 自動起動
+          TRACKING_URL="$(gh issue create --repo "$GITHUB_REPOSITORY" \
             --title "[upstream] RustDesk $LATEST 検知 (現: $CURRENT) → 自動取り込み起動" \
             --label upstream-tracking \
-            --body "RustDesk $LATEST を検知。upstream-merge.yml を自動起動します(マージ→ビルド→検証)。完了後 [READY] Issue が立ちます。取り込み後はこの Issue を close してください(次版検知の妨げにならないよう)。"
+            --body "RustDesk $LATEST を検知。upstream-merge.yml を自動起動します(マージ→ビルド→検証)。完了後 [READY] Issue が立ちます。取り込み後はこの Issue を close してください(次版検知の妨げにならないよう)。")"
+
+          export GH_TOKEN="$BOT"
+          gh label create upstream-available --repo sakuranet-git/SAKURA-Remote --color FBCA04 --description "上流新版を検知" 2>/dev/null || true
+          gh label create approval-required --repo sakuranet-git/SAKURA-Remote --color D93F0B --description "管理者承認が必要" 2>/dev/null || true
+          ADMIN_URL="$(gh issue create --repo sakuranet-git/SAKURA-Remote \
+            --title "[upstream-available] RustDesk $LATEST 検知: SAKURA-Remote更新候補を作成開始" \
+            --label upstream-available \
+            --label approval-required \
+            --body "RustDesk $LATEST を検知しました。SAKURA-Remote更新候補の自動作成を開始します。
+
+          - 現在の取り込み済み: $CURRENT
+          - 新しい上流タグ: $LATEST
+          - source tracking issue: $TRACKING_URL
+          - watch workflow: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          ここでは公開しません。upstream-merge、Windowsビルド、配布パッケージ作成、機能確認の結果を確認し、管理者OK後に publish-approved.yml でGit反映します。HP公開は別手順で、承認なしには実行しません。")"
+
+          echo "管理Repo通知Issue: $ADMIN_URL"
 
           if gh workflow run "upstream-merge.yml" --repo "$GITHUB_REPOSITORY" --ref sakura-remote -f upstream_tag="$LATEST"; then
             echo "upstream-merge を起動しました: $LATEST"
+            gh issue comment "$ADMIN_URL" --repo sakuranet-git/SAKURA-Remote \
+              --body "upstream-merge.yml を起動しました。完了後、この管理Repoに release-ready または upstream-failed の通知Issueが作成されます。"
           else
             echo "::warning::upstream-merge の起動に失敗"
+            export GH_TOKEN="$BOT"
+            gh label create upstream-failed --repo sakuranet-git/SAKURA-Remote --color B60205 --description "上流取り込み失敗" 2>/dev/null || true
+            gh issue create --repo sakuranet-git/SAKURA-Remote \
+              --title "[upstream-failed] RustDesk $LATEST upstream-merge起動失敗" \
+              --label upstream-failed \
+              --body "RustDesk $LATEST を検知しましたが、upstream-merge.yml の起動に失敗しました。
+
+          - watch workflow: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+          - source tracking issue: $TRACKING_URL
+
+          SAKURA-Remote本番・GitHub Releases・HPは更新されていません。"
+            echo "ADMIN_FAILURE_NOTIFIED=1" >> "$GITHUB_ENV"
+            export GH_TOKEN="${{ github.token }}"
             NUM="$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label upstream-tracking --search "$LATEST in:title" --json number --jq '.[0].number')"
             gh issue comment "$NUM" --repo "$GITHUB_REPOSITORY" \
               --body "自動起動(upstream-merge dispatch)に失敗しました。手動で Actions から upstream-merge.yml を tag=$LATEST で実行してください。" || true
             exit 1
           fi
+
+      - name: 管理Repoへwatch失敗通知
+        if: ${{ (failure() || cancelled()) && env.ADMIN_FAILURE_NOTIFIED != '1' }}
+        env:
+          GH_TOKEN: ${{ secrets.SAKURA_BOT_TOKEN }}
+        run: |
+          set +e
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::warning::SAKURA_BOT_TOKEN未設定のため管理Repoへ失敗通知できません。"
+            exit 0
+          fi
+          gh label create upstream-failed --repo sakuranet-git/SAKURA-Remote --color B60205 --description "上流取り込み失敗" 2>/dev/null || true
+          gh issue create --repo sakuranet-git/SAKURA-Remote \
+            --title "[upstream-failed] upstream-watch 実行失敗" \
+            --label upstream-failed \
+            --body "RustDesk新版検知workflowが失敗またはキャンセルされました。
+
+          - watch workflow: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          SAKURA-Remote本番、HP、GitHub Releasesは更新されていません。"

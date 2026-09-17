@@ -134,7 +134,13 @@ jobs:
           fi
           git -C libs/hbb_common checkout "${BRANCH}"
           git add libs/hbb_common
-          git commit --no-edit -m "chore: merge upstream ${TAG} and hbb_common ${NEW_HBB}" || true
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git commit --no-edit
+          elif git diff --cached --quiet; then
+            echo "No parent/submodule pointer changes to commit."
+          else
+            git commit --no-edit -m "chore: merge upstream ${TAG} and hbb_common ${NEW_HBB}"
+          fi
           git push origin "${BRANCH}" --force-with-lease
           echo "HEAD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
@@ -150,7 +156,7 @@ jobs:
           GH_TOKEN: ${{ secrets.SAKURA_BOT_TOKEN }}
         run: |
           set -euo pipefail
-          gh workflow run "SAKURA Windows x64 (fast)" --repo "$FORK" --ref "${BRANCH}"
+          gh workflow run "SAKURA Windows x64 (fast)" --repo "$FORK" --ref "${BRANCH}" -f upstream_tag="${TAG}"
           RID=""
           for i in $(seq 1 30); do
             sleep 10
@@ -185,7 +191,13 @@ jobs:
           git merge --no-ff --no-edit "${BRANCH}"
           echo "${TAG}" > .sakura-upstream
           git add .sakura-upstream libs/hbb_common
-          git commit -m "chore: promote RustDesk ${TAG} to sakura-remote" || true
+          if git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            git commit --no-edit
+          elif git diff --cached --quiet; then
+            echo "No sakura-remote promotion changes to commit."
+          else
+            git commit -m "chore: promote RustDesk ${TAG} to sakura-remote"
+          fi
           git push origin sakura-remote
           echo "PROMOTED_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "HBB_PROMOTED_SHA=${HBB_PROMOTED_SHA}" >> "$GITHUB_ENV"
@@ -206,10 +218,12 @@ jobs:
 
       - name: READY notification
         env:
-          GH_TOKEN: ${{ github.token }}
+          SRC_TOKEN: ${{ github.token }}
+          BOT: ${{ secrets.SAKURA_BOT_TOKEN }}
           RID: ${{ steps.build.outputs.run_id }}
         run: |
           set -euo pipefail
+          export GH_TOKEN="$SRC_TOKEN"
           gh label create upstream-merge-ok --repo "$GITHUB_REPOSITORY" --color 0E8A16 --description "Upstream merge verified" 2>/dev/null || true
           BODY="RustDesk ${TAG} was merged, built, verified, promoted to sakura-remote, and the SAKURA-Remote release workflow was dispatched.
 
@@ -221,13 +235,33 @@ jobs:
 
           The release workflow generates the package artifact. The local Windows auto deploy task publishes it with the saved WinSCP session, then users can update from the app button after EXE/JSON publication."
           gh issue create --repo "$GITHUB_REPOSITORY" --title "[READY] RustDesk ${TAG} SAKURA promoted and release dispatched" --label upstream-merge-ok --body "$BODY"
+          if [ -n "${BOT:-}" ]; then
+            export GH_TOKEN="$BOT"
+            gh label create upstream-merge-ok --repo "${RELEASE_REPO}" --color 0E8A16 --description "上流取り込みとビルド成功" 2>/dev/null || true
+            gh label create approval-required --repo "${RELEASE_REPO}" --color D93F0B --description "管理者承認が必要" 2>/dev/null || true
+            gh issue create --repo "${RELEASE_REPO}" \
+              --title "[upstream-merge-ok] RustDesk ${TAG}: SAKURA-Remote更新候補の元ビルド成功" \
+              --label upstream-merge-ok \
+              --label approval-required \
+              --body "RustDesk ${TAG} の取り込み、Windowsビルド、検証ゲート、sakura-remote反映、リリース候補作成workflow起動まで成功しました。
+
+          - source branch: ${BRANCH}
+          - hbb_common promoted SHA: ${HBB_PROMOTED_SHA}
+          - source promoted SHA: ${PROMOTED_SHA}
+          - Windows build run: ${GITHUB_SERVER_URL}/${FORK}/actions/runs/${RID}
+          - release workflow repo: ${RELEASE_REPO}
+
+          まだHP・GitHub Releasesへの本番公開は完了していません。release-ready Issueと成果物を確認し、管理者OK後に publish-approved.yml を実行してください。"
+          fi
 
       - name: Failure notification
-        if: failure()
+        if: ${{ failure() || cancelled() }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          SRC_TOKEN: ${{ github.token }}
+          BOT: ${{ secrets.SAKURA_BOT_TOKEN }}
         run: |
           set +e
+          export GH_TOKEN="$SRC_TOKEN"
           gh label create upstream-merge-failed --repo "$GITHUB_REPOSITORY" --color B60205 --description "Upstream merge failed" 2>/dev/null || true
           BODY="RustDesk ${TAG} automation failed.
 
@@ -240,4 +274,19 @@ jobs:
           EXIST=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --label upstream-merge-failed --search "${TAG} in:title" --json number --jq 'length')
           if [ "$EXIST" = "0" ]; then
             gh issue create --repo "$GITHUB_REPOSITORY" --title "[FAILED] RustDesk ${TAG} automation failed" --label upstream-merge-failed --body "$BODY"
+          fi
+          if [ -n "${BOT:-}" ]; then
+            export GH_TOKEN="$BOT"
+            gh label create upstream-failed --repo "${RELEASE_REPO}" --color B60205 --description "上流取り込み失敗" 2>/dev/null || true
+            gh issue create --repo "${RELEASE_REPO}" \
+              --title "[upstream-failed] RustDesk ${TAG}: SAKURA-Remote更新候補作成失敗" \
+              --label upstream-failed \
+              --body "RustDesk ${TAG} の自動取り込みまたは検証が失敗しました。
+
+          - source branch: ${BRANCH}
+          - workflow run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - hbb conflicts: ${{ steps.hbbmerge.outputs.files }}
+          - parent conflicts: ${{ steps.parentmerge.outputs.files }}
+
+          SAKURA-Remote本番、HP、GitHub Releasesは更新されていません。失敗原因を修正してから再実行してください。"
           fi

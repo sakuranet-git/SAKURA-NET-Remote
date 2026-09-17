@@ -7,6 +7,12 @@ name: SAKURA Windows x64 (fast)
 
 on:
   workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: "Upstream source tag to stamp into the build (optional for manual legacy builds)"
+        required: false
+        default: ""
+        type: string
   workflow_call:
 
 env:
@@ -16,7 +22,7 @@ env:
   FLUTTER_VERSION: "3.24.5"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
-  VERSION: "1.4.6"
+  VERSION: "${{ inputs.upstream_tag || '1.4.6' }}"
   UPLOAD_ARTIFACT: "true"
   SIGN_BASE_URL: "-2"
   # 自社サーバー/Keyをビルドに焼き込む（toml適用に依存せず必ず反映させる）
