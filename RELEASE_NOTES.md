@@ -1,5 +1,13 @@
 # Release notes
 
+## macOS v2.4.9 CI candidate (2026-10-03)
+
+- Record the exact source commit in the macOS app bundle for downstream installer provenance checks.
+- Sign the bundled service before the main executable in unsigned CI artifacts.
+- Keep unsigned and signed macOS builds as internal CI artifacts; publication requires an approved, trusted installer release.
+- Do not publish the combined unsigned archive.
+- Gate macOS CI builds on the distribution policy test.
+
 ## v2.4.10 (2026-09-17)
 
 - 上流新版検知時に管理リポジトリへ通知Issueを作成。
