@@ -24,4 +24,15 @@ if grep -Fq 'MACOS_P12_BASE64 != null' "$WORKFLOW"; then
     exit 1
 fi
 
+VALIDATION_WORKFLOW="$ROOT/.github/workflows/mac-validation.yml"
+if [ -f "$VALIDATION_WORKFLOW" ]; then
+    grep -Fq 'contents: read' "$VALIDATION_WORKFLOW"
+    grep -Fq 'MACOS_P12_BASE64: ""' "$VALIDATION_WORKFLOW"
+    grep -Fq 'target: aarch64-apple-darwin' "$VALIDATION_WORKFLOW"
+    grep -Fq 'run: flutter test test/mac_update_visibility_test.dart' "$VALIDATION_WORKFLOW"
+    if grep -Eq 'softprops/action-gh-release|gh release|target: x86_64-apple-darwin|^  push:' "$VALIDATION_WORKFLOW"; then
+        echo 'Mac validation must be manual, arm64 only, and must not publish releases.' >&2
+        exit 1
+    fi
+fi
 echo 'Mac CI distribution checks passed'
