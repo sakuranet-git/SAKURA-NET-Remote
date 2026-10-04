@@ -13,6 +13,7 @@ import 'package:flutter_hbb/desktop/pages/connection_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_setting_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
 import 'package:flutter_hbb/desktop/widgets/update_progress.dart';
+import 'package:flutter_hbb/desktop/widgets/mac_update_visibility.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -51,6 +52,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   var watchIsCanRecordAudio = false;
   String? _lastMacPermissionState;
   Timer? _updateTimer;
+  Timer? _macUpdateCheckTimer;
+  bool _macUpdateAvailable = false;
   bool isCardClosed = false;
 
   final RxBool _editHover = false.obs;
@@ -95,7 +98,8 @@ class _DesktopHomePageState extends State<DesktopHomePage>
         alignment: Alignment.center,
         child: loadLogo(),
       ),
-      if ((isWindows || isMacOS) && bind.isCustomClient())
+      if ((isWindows || (isMacOS && _macUpdateAvailable)) &&
+          bind.isCustomClient())
         Align(
           alignment: Alignment.center,
           child: buildLiveUpdateButton(context),
@@ -212,6 +216,31 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   String get _versionJsonUrl =>
       isMacOS ? _kMacVersionJsonUrl : _kWindowsVersionJsonUrl;
 
+  Future<void> _refreshMacUpdateAvailability() async {
+    if (!isMacOS) return;
+    var available = false;
+    try {
+      final current = await _getInstalledMacProductVersion();
+      final teamId = await _getInstalledMacTeamIdentifier();
+      if (current.isNotEmpty && teamId.isNotEmpty) {
+        final response = await http
+            .get(Uri.parse(_kMacVersionJsonUrl))
+            .timeout(const Duration(seconds: 15));
+        if (response.statusCode == 200) {
+          final manifest = jsonDecode(response.body);
+          if (manifest is Map<String, dynamic>) {
+            available = shouldShowMacUpdate(manifest, current, teamId);
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('SAKURA macOS update availability check failed: $e');
+    }
+    if (mounted && available != _macUpdateAvailable) {
+      setState(() => _macUpdateAvailable = available);
+    }
+  }
+
   Widget buildLiveUpdateButton(BuildContext context) {
     return Obx(() {
       final checking = _liveUpdateChecking.value;
@@ -299,6 +328,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
       showToast(translate('live_update_failed'));
     } finally {
       _liveUpdateChecking.value = false;
+      if (isMacOS) unawaited(_refreshMacUpdateAvailability());
     }
   }
 
@@ -371,15 +401,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   }
 
   int _compareVersion(String a, String b) {
-    final pa = a.split('.').map((e) => int.tryParse(e) ?? 0).toList();
-    final pb = b.split('.').map((e) => int.tryParse(e) ?? 0).toList();
-    final len = pa.length > pb.length ? pa.length : pb.length;
-    for (var i = 0; i < len; i++) {
-      final va = i < pa.length ? pa[i] : 0;
-      final vb = i < pb.length ? pb[i] : 0;
-      if (va != vb) return va > vb ? 1 : -1;
-    }
-    return 0;
+    return compareProductVersions(a, b);
   }
 
   Future<bool?> _confirmUpdateDialog(
@@ -972,6 +994,12 @@ class _DesktopHomePageState extends State<DesktopHomePage>
   @override
   void initState() {
     super.initState();
+    if (isMacOS) {
+      _refreshMacUpdateAvailability();
+      _macUpdateCheckTimer = Timer.periodic(const Duration(hours: 6), (_) {
+        _refreshMacUpdateAvailability();
+      });
+    }
     _updateTimer = periodic_immediate(const Duration(seconds: 1), () async {
       await gFFI.serverModel.fetchID();
       final error = await bind.mainGetError();
@@ -1169,6 +1197,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     _uniLinksSubscription?.cancel();
     Get.delete<RxBool>(tag: 'stop-service');
     _updateTimer?.cancel();
+    _macUpdateCheckTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
