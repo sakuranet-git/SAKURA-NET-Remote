@@ -226,3 +226,31 @@ jobs:
           } finally {
             if (-not $gui.HasExited) { $gui.Kill($true); $gui.WaitForExit() }
           }
+
+  verify-desktop-preservation:
+    if: github.ref == 'refs/heads/rc/verify-1.5.3'
+    needs: generate-bridge
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, macos-15]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: bridge-artifact
+          path: .
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+          flutter-version: 3.24.5
+      - name: Test private history, password display, network settings and file operations using synthetic data
+        working-directory: flutter
+        run: flutter test --reporter expanded test/sakura_chat_history_test.dart test/sakura_password_display_test.dart test/server_settings_dialog_test.dart test/download_path_test.dart test/file_model_test.dart
