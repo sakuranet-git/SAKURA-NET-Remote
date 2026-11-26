@@ -1,0 +1,31 @@
+name: RC 1.5.3 Windows file transfer tests
+on:
+  push:
+    branches: [rc/verify-1.5.3]
+    paths: [.github/workflows/rc-windows-file-tests.yml]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  file-tests:
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: 2a550059f19bf4d1a64f08ba66b9cc4b6546c5d3
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          github-token: ${{ github.token }}
+          run-id: 45783965050
+          name: bridge-artifact
+          path: .
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          channel: stable
+          flutter-version: 3.24.5
+      - name: Run Windows file transfer and download path tests (including real NTFS links)
+        working-directory: flutter
+        run: flutter test --reporter expanded test/download_path_test.dart test/file_model_test.dart
