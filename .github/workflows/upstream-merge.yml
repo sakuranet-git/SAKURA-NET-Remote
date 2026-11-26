@@ -15,6 +15,10 @@ on:
         description: "RustDesk upstream tag to merge (example: 1.4.10)"
         required: true
         type: string
+      run_remote_pipeline:
+        description: "Administrator-approved remote writes (candidate pushes, promotion and release dispatch); leave OFF for local-only evaluation"
+        type: boolean
+        default: false
 
 concurrency:
   group: upstream-merge-${{ inputs.upstream_tag }}
@@ -61,6 +65,8 @@ jobs:
           set -euo pipefail
           git config user.name "sakura-bot"
           git config user.email "ai.sakuranet@gmail.com"
+          git -C libs/hbb_common config user.name "$(git config --local user.name)"
+          git -C libs/hbb_common config user.email "$(git config --local user.email)"
           git remote set-url origin "https://x-access-token:${BOT}@github.com/${FORK}.git"
           git remote add upstream "https://github.com/rustdesk/rustdesk.git" || true
           git -C libs/hbb_common remote set-url origin "https://x-access-token:${BOT}@github.com/${HBB}.git"
@@ -95,7 +101,12 @@ jobs:
           git checkout -B sakura-remote origin/sakura-remote
           git fetch upstream "$SHA" --quiet || git fetch upstream --quiet
           git checkout -B "${BRANCH}" sakura-remote
-          if ! git merge --no-ff --no-edit "$SHA"; then
+          if git merge --no-ff --no-edit "$SHA"; then :; else
+            status=$?
+            if ! git rev-parse -q --verify MERGE_HEAD >/dev/null || [ -z "$(git ls-files -u)" ]; then
+              echo "::error::hbb_common merge failed (git exit $status, no unresolved merge). See git stderr above."
+              exit "$status"
+            fi
             { echo "files<<EOF"; git diff --name-only --diff-filter=U; echo "EOF"; } >> "$GITHUB_OUTPUT"
             git merge --abort || true
             echo "::error::hbb_common merge conflict"
@@ -115,7 +126,6 @@ jobs:
             git add src/config.rs
             git commit -m "fix: reapply SAKURA rendezvous/key after upstream merge"
           fi
-          git push origin "${BRANCH}" --force-with-lease
           echo "NEW_HBB=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Merge rustdesk parent and update submodule pointer
@@ -123,7 +133,12 @@ jobs:
         run: |
           set -euo pipefail
           git checkout -B "${BRANCH}" sakura-remote
-          if ! git merge --no-ff --no-edit "${TAG}"; then
+          if git merge --no-ff --no-edit "${TAG}"; then :; else
+            status=$?
+            if ! git rev-parse -q --verify MERGE_HEAD >/dev/null || [ -z "$(git ls-files -u)" ]; then
+              echo "::error::Parent merge failed (git exit $status, no unresolved merge). See git stderr above."
+              exit "$status"
+            fi
             OTHER=$(git diff --name-only --diff-filter=U | grep -v '^libs/hbb_common$' || true)
             if [ -n "$OTHER" ]; then
               { echo "files<<EOF"; echo "$OTHER"; echo "EOF"; } >> "$GITHUB_OUTPUT"
@@ -141,7 +156,6 @@ jobs:
           else
             git commit --no-edit -m "chore: merge upstream ${TAG} and hbb_common ${NEW_HBB}"
           fi
-          git push origin "${BRANCH}" --force-with-lease
           echo "HEAD_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
 
       - name: Source verification gate
@@ -150,7 +164,15 @@ jobs:
           & ./installer/check_network_invariants.ps1 -SourceDir .
           if ($LASTEXITCODE -ne 0) { throw "Source network invariant gate failed." }
 
+      - name: Push source branches for explicitly approved remote pipeline
+        if: inputs.run_remote_pipeline
+        run: |
+          set -euo pipefail
+          git -C libs/hbb_common push origin "${BRANCH}" --force-with-lease
+          git push origin "${BRANCH}" --force-with-lease
+
       - name: Run Windows build and wait for post-build gate
+        if: inputs.run_remote_pipeline
         id: build
         env:
           GH_TOKEN: ${{ secrets.SAKURA_BOT_TOKEN }}
@@ -173,6 +195,7 @@ jobs:
           gh run watch "$RID" --repo "$FORK" --exit-status
 
       - name: Promote verified branches to sakura-remote
+        if: inputs.run_remote_pipeline
         env:
           GH_TOKEN: ${{ secrets.SAKURA_BOT_TOKEN }}
         run: |
@@ -203,6 +226,7 @@ jobs:
           echo "HBB_PROMOTED_SHA=${HBB_PROMOTED_SHA}" >> "$GITHUB_ENV"
 
       - name: Dispatch SAKURA-Remote release workflow
+        if: inputs.run_remote_pipeline
         env:
           GH_TOKEN: ${{ secrets.SAKURA_BOT_TOKEN }}
           RID: ${{ steps.build.outputs.run_id }}
@@ -217,6 +241,7 @@ jobs:
             -f deploy=false
 
       - name: READY notification
+        if: inputs.run_remote_pipeline
         env:
           SRC_TOKEN: ${{ github.token }}
           BOT: ${{ secrets.SAKURA_BOT_TOKEN }}

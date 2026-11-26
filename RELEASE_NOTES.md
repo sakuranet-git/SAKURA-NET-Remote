@@ -1,5 +1,12 @@
 # Release notes
 
+## 1.5.3 integration candidate — local only (2026-11-26)
+
+- Integrated upstream `95cca3f661f635b3cc85c04935fe8d96d8f432ef` on SAKURA baseline `caf07639d5846d771059c0d2d4c985817f9f60ea`. Child repository integrates `fae47e024dd83cef6aaecde0aa7d11731df11649`; its SAKURA server, public key and application name are retained.
+- Kept the SAKURA core DLL name beside upstream Windows service-command handling, SAKURA update UI and guards, Japanese branding, macOS naming and approval-only DMG handling. Disabled the stock macOS update scheduler for custom clients before it can start or acquire a lock.
+- Upstream workflow now configures both repositories' Git identities and distinguishes a real conflicted index from a failed merge with no unresolved entries. Remote push/build/promotion/dispatch is opt-in; the existing deployed workflow has not been changed.
+- Local source checks only are not a distribution sign-off. The upstream version is not the installer's product version. No release, tag or remote branch is created by this local integration.
+
 ## macOS v2.4.9 CI candidate (2026-10-03)
 
 - Record the exact source commit in the macOS app bundle for downstream installer provenance checks.
