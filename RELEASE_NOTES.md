@@ -1,5 +1,12 @@
 # Release notes
 
+## 1.5.3 verification candidate — desktop UI and local history (unreleased)
+
+- Windows/macOS chat history is scoped to the local OS user and conversation. Messages expire after 30 days; deletion is available per conversation and in General settings for all local history. The application does not send this history to a separate server. Already-lost messages cannot be recovered.
+- The ID/relay configuration dialog waits for the service options instead of presenting an editable blank form on a known read failure. No-op saves and stale reads are rejected or skipped; unrelated fields are not submitted by the dialog.
+- Fixed-password mode does not request or display a temporary password; an unavailable desktop service option snapshot is not evidence that temporary-password mode is enabled. No existing password is read, reset, or distributed by this change.
+- This source entry does not certify an in-place upgrade or a two-device connection. Installer-only 2.4.11 does not contain these UI changes. No product distribution is authorized by these notes.
+
 ## 1.5.3 integration candidate — local only (2026-11-26)
 
 - Integrated upstream `95cca3f661f635b3cc85c04935fe8d96d8f432ef` on SAKURA baseline `caf07639d5846d771059c0d2d4c985817f9f60ea`. Child repository integrates `fae47e024dd83cef6aaecde0aa7d11731df11649`; its SAKURA server, public key and application name are retained.

@@ -54,22 +54,42 @@ void setTemporaryPasswordLengthDialog(
   }, backDismiss: true, clickMaskDismiss: true);
 }
 
-void showServerSettings(OverlayDialogManager dialogManager,
-    void Function(VoidCallback) setState) async {
-  Map<String, dynamic> options = {};
-  try {
-    options = jsonDecode(await bind.mainGetOptions());
-  } catch (e) {
-    print("Invalid server config: $e");
+Future<ServerConfig> readServerSettingsSnapshot({
+  required Future<bool> Function() synced,
+  required Future<String> Function() read,
+  Duration retryDelay = const Duration(milliseconds: 400),
+}) async {
+  for (int i = 0; i < 6; i++) {
+    if (await synced()) {
+      final options = jsonDecode(await read());
+      if (options is! Map<String, dynamic> || options['ipc-closed'] == 'Y') {
+        throw StateError('Server settings unavailable');
+      }
+      return ServerConfig.fromOptions(options);
+    }
+    if (i < 5) await Future<void>.delayed(retryDelay);
   }
-  showServerSettingsWithValue(
-      ServerConfig.fromOptions(options), dialogManager, setState);
+  throw StateError('Server settings not synchronized');
 }
 
-void showServerSettingsWithValue(
-    ServerConfig serverConfig,
-    OverlayDialogManager dialogManager,
-    void Function(VoidCallback)? upSetState) async {
+Future<ServerConfig> _readServerSettings() => readServerSettingsSnapshot(
+    synced: () => bind.optionSynced(), read: () => bind.mainGetOptions());
+
+void showServerSettings(OverlayDialogManager dialogManager,
+    void Function(VoidCallback) setState) async {
+  try {
+    final snapshot = await _readServerSettings();
+    showServerSettingsWithValue(snapshot, dialogManager, setState,
+        previous: snapshot);
+  } catch (_) {
+    // Do not log configuration data or allow a failed read to become a blank edit.
+    showToast(translate('Failed') + ': ' + translate('ID/Relay Server'));
+  }
+}
+
+void showServerSettingsWithValue(ServerConfig serverConfig,
+    OverlayDialogManager dialogManager, void Function(VoidCallback)? upSetState,
+    {ServerConfig? previous}) async {
   const labelWidth = 120.0;
   const labelSpacing = 8.0;
   var isInProgress = false;
@@ -91,21 +111,28 @@ void showServerSettingsWithValue(
 
   dialogManager.show((setState, close, context) {
     Future<bool> submit() async {
+      if (isInProgress) return false;
       setState(() {
         isInProgress = true;
       });
-      bool ret = await setServerConfig(
+      try {
+        return await setServerConfig(
           null,
           errMsgs,
           ServerConfig(
-              idServer: idCtrl.text.trim(),
-              relayServer: relayCtrl.text.trim(),
-              apiServer: apiCtrl.text.trim(),
-              key: keyCtrl.text.trim()));
-      setState(() {
-        isInProgress = false;
-      });
-      return ret;
+            idServer: idCtrl.text.trim(),
+            relayServer: relayCtrl.text.trim(),
+            apiServer: apiCtrl.text.trim(),
+            key: keyCtrl.text.trim(),
+          ),
+          previous: previous,
+          readCurrent: _readServerSettings,
+        );
+      } catch (_) {
+        return false;
+      } finally {
+        if (context.mounted) setState(() => isInProgress = false);
+      }
     }
 
     Widget buildField(

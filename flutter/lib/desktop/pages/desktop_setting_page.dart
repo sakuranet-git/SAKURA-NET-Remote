@@ -418,6 +418,40 @@ class _GeneralState extends State<_General> {
         if (!isWeb) service(),
         theme(),
         _Card(title: 'Language', children: [language()]),
+        if (gFFI.chatModel.hasLocalHistory)
+          _Card(title: 'Chat', children: [
+            TextButton.icon(
+                icon: const Icon(Icons.delete_outline),
+                label: Text(Localizations.localeOf(context).languageCode == 'ja'
+                    ? 'この端末のチャット履歴をすべて削除'
+                    : 'Delete all chat history on this device'),
+                onPressed: () async {
+                  final ja =
+                      Localizations.localeOf(context).languageCode == 'ja';
+                  final ok = await showDialog<bool>(
+                      context: context,
+                      builder: (ctx) => AlertDialog(
+                              content: Text(ja
+                                  ? 'この端末に保存した全相手のチャット履歴を削除しますか？ 元に戻せません。'
+                                  : 'Delete all chat history stored on this device? This cannot be undone.'),
+                              actions: [
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, false),
+                                    child: Text(translate('Cancel'))),
+                                TextButton(
+                                    onPressed: () => Navigator.pop(ctx, true),
+                                    child: Text(translate('Delete'))),
+                              ]));
+                  if (ok == true && mounted) {
+                    final removed = gFFI.chatModel.clearLocalHistory();
+                    showToast(removed
+                        ? (ja ? '履歴を削除しました' : 'Chat history deleted')
+                        : (ja
+                            ? '履歴を削除できませんでした'
+                            : 'Could not delete chat history'));
+                  }
+                })
+          ]),
         if (!isWeb) hwcodec(),
         if (!isWeb) audio(context),
         if (!isWeb) record(context),
@@ -525,7 +559,10 @@ class _GeneralState extends State<_General> {
     final incomingOnly = bind.isIncomingOnly();
     final outgoingOnly = bind.isOutgoingOnly();
     final showAutoUpdate = (isWindows && bind.mainIsInstalled()) ||
-    (isMacOS && bind.mainIsInstalled() && bind.mainIsInstalledDaemon(prompt: false) && !bind.isCustomClient());
+        (isMacOS &&
+            bind.mainIsInstalled() &&
+            bind.mainIsInstalledDaemon(prompt: false) &&
+            !bind.isCustomClient());
     final children = <Widget>[
       if (!isWeb && !incomingOnly)
         _OptionCheckBox(context, 'Confirm before closing multiple tabs',
@@ -1145,15 +1182,16 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
               child: _OptionCheckBox(context, "Enable trusted devices",
                   kOptionEnableTrustedDevices,
                   optSetter: (key, value) async {
-                try {
-                  await mainSetBoolOption(key, value);
-                } catch (error) {
-                  showToast(error.toString());
-                }
-              },
-                  enabled: !locked, update: (v) {
-                setState(() {});
-              }),
+                    try {
+                      await mainSetBoolOption(key, value);
+                    } catch (error) {
+                      showToast(error.toString());
+                    }
+                  },
+                  enabled: !locked,
+                  update: (v) {
+                    setState(() {});
+                  }),
             ),
           ),
           if (mainGetBoolOptionSync(kOptionEnableTrustedDevices))
@@ -2609,8 +2647,8 @@ class _AboutState extends State<_About> {
                   if (pv.isEmpty) return const SizedBox.shrink();
                   return SelectionArea(
                       child: Text('さくらリモート バージョン: $pv',
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.w600))
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.w600))
                           .marginSymmetric(vertical: 4.0));
                 },
               ),

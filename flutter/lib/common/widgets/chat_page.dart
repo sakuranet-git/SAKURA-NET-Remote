@@ -93,7 +93,51 @@ class ChatPage extends StatelessWidget implements PageShape {
                                 (e) => e.id == chatModel.currentKey.connId)
                             ?.disconnected ==
                         true;
-            return Stack(
+            final ja = Localizations.localeOf(context).languageCode == 'ja';
+            final key = chatModel.currentKey;
+            Widget historyHeader() => Row(children: [
+                  const SizedBox(width: 8),
+                  Expanded(
+                      child: Text(
+                          chatModel.historyError
+                              ? (ja
+                                  ? 'この端末の履歴を読み書きできません'
+                                  : 'Local history unavailable')
+                              : (ja
+                                  ? 'この端末に30日間保存'
+                                  : 'Saved on this device for 30 days'),
+                          style: Theme.of(context).textTheme.bodySmall)),
+                  IconButton(
+                      tooltip: ja
+                          ? 'この会話の履歴を削除'
+                          : 'Delete this conversation history',
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: key.peerId.isEmpty
+                          ? null
+                          : () async {
+                              final ok = await showDialog<bool>(
+                                  context: context,
+                                  builder: (ctx) => AlertDialog(
+                                          content: Text(ja
+                                              ? 'この端末から、この相手とのチャット履歴を削除しますか？'
+                                              : 'Delete this chat history from this device?'),
+                                          actions: [
+                                            TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx, false),
+                                                child: Text(
+                                                    ja ? 'キャンセル' : 'Cancel')),
+                                            TextButton(
+                                                onPressed: () =>
+                                                    Navigator.pop(ctx, true),
+                                                child:
+                                                    Text(ja ? '削除' : 'Delete'))
+                                          ]));
+                              if (ok == true && context.mounted)
+                                chatModel.clearLocalHistory(key);
+                            })
+                ]);
+            final chatPanel = Stack(
               children: [
                 LayoutBuilder(builder: (context, constraints) {
                   final chat = DashChat(
@@ -172,6 +216,10 @@ class ChatPage extends StatelessWidget implements PageShape {
                 }),
               ],
             ).paddingOnly(bottom: 8);
+            return chatModel.hasLocalHistory
+                ? Column(
+                    children: [historyHeader(), Expanded(child: chatPanel)])
+                : chatPanel;
           },
         ),
       ),

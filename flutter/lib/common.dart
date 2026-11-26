@@ -2959,6 +2959,7 @@ bool get kUseCompatibleUiMode =>
 bool get isWin10 => windowsBuildNumber.windowsVersion == WindowsTarget.w10;
 
 class ServerConfig {
+  Set<String> _importFields = {};
   late String idServer;
   late String relayServer;
   late String apiServer;
@@ -2989,6 +2990,7 @@ class ServerConfig {
     relayServer = json['relay'] ?? '';
     apiServer = json['api'] ?? '';
     key = json['key'] ?? '';
+    _importFields = json.keys.whereType<String>().toSet();
   }
 
   /// encode to shared string
@@ -3011,6 +3013,13 @@ class ServerConfig {
         relayServer = options['relay-server'] ?? "",
         apiServer = options['api-server'] ?? "",
         key = options['key'] ?? "";
+
+  Map<String, String> get optionFields => {
+        'custom-rendezvous-server': idServer,
+        'relay-server': relayServer,
+        'api-server': apiServer,
+        'key': key,
+      };
 }
 
 Widget dialogButton(String text,
@@ -3589,7 +3598,8 @@ class _CountDownButtonState extends State<_CountDownButton> {
 }
 
 importConfig(List<TextEditingController>? controllers, List<RxString>? errMsgs,
-    String? text) {
+    String? text,
+    {bool stageOnly = false}) {
   text = text?.trim();
   if (text != null && text.isNotEmpty) {
     try {
@@ -3598,6 +3608,13 @@ importConfig(List<TextEditingController>? controllers, List<RxString>? errMsgs,
         sc.relayServer = '';
       }
       if (sc.idServer.isNotEmpty) {
+        if (stageOnly && controllers != null) {
+          if (sc._importFields.contains('host')) controllers[0].text = sc.idServer;
+          if (sc._importFields.contains('relay')) controllers[1].text = sc.relayServer;
+          if (sc._importFields.contains('api')) controllers[2].text = sc.apiServer;
+          if (sc._importFields.contains('key')) controllers[3].text = sc.key;
+          return sc;
+        }
         Future<bool> success = setServerConfig(controllers, errMsgs, sc);
         success.then((value) {
           if (value) {
@@ -3621,8 +3638,17 @@ importConfig(List<TextEditingController>? controllers, List<RxString>? errMsgs,
 Future<bool> setServerConfig(
   List<TextEditingController>? controllers,
   List<RxString>? errMsgs,
-  ServerConfig config,
-) async {
+  ServerConfig config, {
+  ServerConfig? previous,
+  Future<ServerConfig> Function()? readCurrent,
+}) async {
+  final original = previous?.optionFields;
+  final edited = config.optionFields.entries
+      .where(
+          (e) => original == null || e.value.trim() != original[e.key]?.trim())
+      .map((e) => e.key)
+      .toSet();
+  if (edited.isEmpty) return true;
   String removeEndSlash(String input) {
     if (input.endsWith('/')) {
       return input.substring(0, input.length - 1);
@@ -3641,7 +3667,9 @@ Future<bool> setServerConfig(
     controllers[3].text = config.key;
   }
   // id
-  if (config.idServer.isNotEmpty && errMsgs != null) {
+  if (edited.contains('custom-rendezvous-server') &&
+      config.idServer.isNotEmpty &&
+      errMsgs != null) {
     errMsgs[0].value = translate(await bind.mainTestIfValidServer(
         server: config.idServer, testWithProxy: true));
     if (errMsgs[0].isNotEmpty) {
@@ -3649,7 +3677,9 @@ Future<bool> setServerConfig(
     }
   }
   // relay
-  if (config.relayServer.isNotEmpty && errMsgs != null) {
+  if (edited.contains('relay-server') &&
+      config.relayServer.isNotEmpty &&
+      errMsgs != null) {
     errMsgs[1].value = translate(await bind.mainTestIfValidServer(
         server: config.relayServer, testWithProxy: true));
     if (errMsgs[1].isNotEmpty) {
@@ -3657,7 +3687,9 @@ Future<bool> setServerConfig(
     }
   }
   // api
-  if (config.apiServer.isNotEmpty && errMsgs != null) {
+  if (edited.contains('api-server') &&
+      config.apiServer.isNotEmpty &&
+      errMsgs != null) {
     if (!config.apiServer.startsWith('http://') &&
         !config.apiServer.startsWith('https://')) {
       errMsgs[2].value =
@@ -3665,14 +3697,23 @@ Future<bool> setServerConfig(
       return false;
     }
   }
+  if (original != null) {
+    if (readCurrent == null) return false;
+    try {
+      final live = (await readCurrent()).optionFields;
+      if (edited.any((key) => original[key] != live[key])) return false;
+    } catch (_) {
+      return false;
+    }
+  }
   final oldApiServer = await bind.mainGetApiServer();
 
   // should set one by one
-  await bind.mainSetOption(
-      key: 'custom-rendezvous-server', value: config.idServer);
-  await bind.mainSetOption(key: 'relay-server', value: config.relayServer);
-  await bind.mainSetOption(key: 'api-server', value: config.apiServer);
-  await bind.mainSetOption(key: 'key', value: config.key);
+  for (final e in config.optionFields.entries) {
+    if (edited.contains(e.key)) {
+      await bind.mainSetOption(key: e.key, value: e.value);
+    }
+  }
   final newApiServer = await bind.mainGetApiServer();
   if (oldApiServer.isNotEmpty &&
       oldApiServer != newApiServer &&

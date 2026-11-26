@@ -21,6 +21,7 @@ import '../common.dart';
 import '../common/widgets/overlay.dart';
 import '../main.dart';
 import 'model.dart';
+import 'local_chat_history.dart';
 
 class MessageKey {
   final String peerId;
@@ -84,6 +85,7 @@ class ChatModel with ChangeNotifier {
 
   @override
   void dispose() {
+    _historyTimer?.cancel();
     inputNode.removeListener(_updateChatInputControl);
     _restoreChatInputControl();
     textController.dispose();
@@ -120,11 +122,86 @@ class ChatModel with ChangeNotifier {
   }
 
   final WeakReference<FFI> parent;
+  final LocalChatHistory? _history;
+  Timer? _historyTimer;
+  bool historyError = false;
+  bool get hasLocalHistory => _history != null;
+  final Map<MessageKey, List<ChatMessage>> _notSaved = {};
+
+  void _refreshHistory(MessageKey key) {
+    final store = _history;
+    if (store == null || key.peerId.isEmpty) return;
+    try {
+      final rows = store.read(key.peerId, key.isOut);
+      final body = _messages.putIfAbsent(
+          key, () => MessageBody(ChatUser(id: key.peerId), []));
+      final cutoff = DateTime.now().subtract(const Duration(days: 30));
+      _notSaved[key]?.removeWhere((m) => !m.createdAt.isAfter(cutoff));
+      body.chatMessages = [
+        ...?_notSaved[key],
+        ...rows.map((r) => ChatMessage(
+            user: r['mine'] == 1 ? me : ChatUser(id: key.peerId),
+            text: r['body'] as String,
+            createdAt: DateTime.fromMillisecondsSinceEpoch(r['stamp'] as int)))
+      ];
+      historyError = _notSaved.values.any((v) => v.isNotEmpty);
+    } catch (_) {
+      historyError = true; // Never log the message, peer, or database record.
+    }
+  }
+
+  void _maintainHistory() {
+    if (_history == null) return;
+    try {
+      _history!.prune();
+    } catch (_) {
+      historyError = true;
+    }
+    _historyTimer ??= Timer.periodic(const Duration(minutes: 15), (_) {
+      try {
+        _history!.prune();
+      } catch (_) {
+        historyError = true;
+      }
+      final cutoff = DateTime.now().subtract(const Duration(days: 30));
+      for (final body in _messages.values) {
+        body.chatMessages.removeWhere((m) => !m.createdAt.isAfter(cutoff));
+      }
+      _refreshHistory(_currentKey);
+      notifyListeners();
+    });
+  }
+
+  bool clearLocalHistory([MessageKey? key]) {
+    if (_history == null || (key != null && key.peerId.isEmpty)) return false;
+    try {
+      if (key == null) {
+        _history!.clearAll();
+        _notSaved.clear();
+        for (final body in _messages.values) {
+          body.clear();
+        }
+      } else {
+        _history!.clear(key.peerId, key.isOut);
+        _notSaved.remove(key);
+        _messages[key]?.clear();
+      }
+      historyError = _notSaved.values.any((v) => v.isNotEmpty);
+      notifyListeners();
+      return true;
+    } catch (_) {
+      historyError = true;
+      notifyListeners();
+      return false;
+    }
+  }
 
   late final SessionID sessionId;
   late FocusNode inputNode;
 
-  ChatModel(this.parent) {
+  ChatModel(this.parent, {LocalChatHistory? history})
+      : _history = history ?? LocalChatHistory.desktop() {
+    _maintainHistory();
     sessionId = parent.target!.sessionId;
     inputNode = FocusNode(
       onKey: (_, event) {
@@ -348,6 +425,7 @@ class ChatModel with ChangeNotifier {
 
   changeCurrentKey(MessageKey key) {
     updateConnIdOfKey(key);
+    _refreshHistory(key);
     String? peerName;
     if (key.connId == clientModeID) {
       peerName = parent.target?.ffiModel.pi.username;
@@ -492,9 +570,19 @@ class ChatModel with ChangeNotifier {
       _messages[key] = MessageBody(message.user, []);
     }
     _messages[key]?.insert(message);
+    if (_history != null && key.peerId.isNotEmpty) {
+      try {
+        _history!.append(key.peerId, key.isOut, message.user.id == me.id,
+            message.createdAt.millisecondsSinceEpoch, message.text);
+      } catch (_) {
+        (_notSaved[key] ??= []).insert(0, message);
+        historyError = true;
+      }
+    }
   }
 
   updateConnIdOfKey(MessageKey key) {
+    if (!_messages.containsKey(key)) _refreshHistory(key);
     if (_messages.keys
             .toList()
             .firstWhereOrNull((e) => e == key && e.connId != key.connId) !=
@@ -533,6 +621,8 @@ class ChatModel with ChangeNotifier {
   }
 
   close() {
+    _historyTimer?.cancel();
+    _historyTimer = null;
     hideChatIconOverlay();
     hideChatWindowOverlay();
     notifyListeners();

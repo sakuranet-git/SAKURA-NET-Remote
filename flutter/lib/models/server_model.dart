@@ -25,6 +25,25 @@ const kUseTemporaryPassword = "use-temporary-password";
 const kUsePermanentPassword = "use-permanent-password";
 const kUseBothPasswords = "use-both-passwords";
 
+// A fixed-password host must never briefly show a temporary credential while
+// the desktop service options are unavailable. Do not even request it then.
+Future<String> visibleTemporaryPassword({
+  required bool settingsReady,
+  required bool stopped,
+  required String method,
+  required String approval,
+  required Future<String> Function() read,
+}) async {
+  if (!settingsReady ||
+      stopped ||
+      approval == 'click' ||
+      !(method == kUseTemporaryPassword ||
+          method == kUseBothPasswords ||
+          method.isEmpty)) return '-';
+  final value = await read();
+  return value.isEmpty ? '-' : value;
+}
+
 class ServerModel with ChangeNotifier {
   bool _isStart = false; // Android MainService status
   bool _mediaOk = false;
@@ -224,9 +243,24 @@ class ServerModel with ChangeNotifier {
     notifyListeners();
   }
 
+  int _passwordRead = 0;
   updatePasswordModel() async {
+    final request = ++_passwordRead;
+    try {
+      await _updatePasswordModel(request);
+    } catch (_) {
+      if (request == _passwordRead && _serverPasswd.text != '-') {
+        _serverPasswd.text = '-';
+        notifyListeners();
+      }
+    }
+  }
+
+  Future<void> _updatePasswordModel(int request) async {
     var update = false;
-    final temporaryPassword = await bind.mainGetTemporaryPassword();
+    final settingsReady = !(isWindows || isMacOS) ||
+        ((await bind.optionSynced()) &&
+            (await bind.mainGetOption(key: 'ipc-closed')) != 'Y');
     final verificationMethod =
         await bind.mainGetOption(key: kOptionVerificationMethod);
     final temporaryPasswordLength =
@@ -242,22 +276,20 @@ class ServerModel with ChangeNotifier {
       hideCm = false;
     }
     */
+    var stopped = await mainGetBoolOption(kOptionStopService);
+    final temporaryPassword = await visibleTemporaryPassword(
+        settingsReady: settingsReady,
+        method: verificationMethod,
+        approval: approveMode,
+        stopped: stopped,
+        read: () => bind.mainGetTemporaryPassword());
+    if (request != _passwordRead) return;
     if (_approveMode != approveMode) {
       _approveMode = approveMode;
       update = true;
     }
-    var stopped = await mainGetBoolOption(kOptionStopService);
     final oldPwdText = _serverPasswd.text;
-    if (stopped ||
-        verificationMethod == kUsePermanentPassword ||
-        _approveMode == 'click') {
-      _serverPasswd.text = '-';
-    } else {
-      if (_serverPasswd.text != temporaryPassword &&
-          temporaryPassword.isNotEmpty) {
-        _serverPasswd.text = temporaryPassword;
-      }
-    }
+    if (oldPwdText != temporaryPassword) _serverPasswd.text = temporaryPassword;
     if (oldPwdText != _serverPasswd.text) {
       update = true;
     }
