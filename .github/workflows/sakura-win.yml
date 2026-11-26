@@ -20,8 +20,7 @@ env:
   RUST_VERSION: "1.75"
   LLVM_VERSION: "15.0.6"
   FLUTTER_VERSION: "3.24.5"
-  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-  VCPKG_COMMIT_ID: "120deac3062162151622ca4860575a33844ba10b"
+  VCPKG_BINARY_SOURCES: "clear;default,readwrite"
   VERSION: "${{ inputs.upstream_tag || '1.4.6' }}"
   UPLOAD_ARTIFACT: "true"
   SIGN_BASE_URL: "-2"
@@ -58,20 +57,21 @@ jobs:
               vcpkg-triplet: x64-windows-static,
             }
     steps:
-      - name: Export GitHub Actions cache environment variables
-        uses: actions/github-script@v6
-        with:
-          script: |
-            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
-            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
-
       - name: Checkout source code
         uses: actions/checkout@v4
         with:
           submodules: recursive
 
+      - name: Read the vcpkg registry pinned by the checked-out source
+        id: registry
+        shell: pwsh
+        run: |
+          $registry = (Get-Content vcpkg.json -Raw | ConvertFrom-Json).'vcpkg-configuration'.'default-registry'
+          if ($registry.kind -ne 'builtin' -or $registry.baseline -notmatch '^[0-9a-f]{40}$') { throw 'Invalid vcpkg baseline' }
+          "commit=$($registry.baseline)" >> $env:GITHUB_OUTPUT
+
       - name: Restore bridge files
-        uses: actions/download-artifact@master
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: bridge-artifact
           path: ./
@@ -117,7 +117,7 @@ jobs:
         uses: lukka/run-vcpkg@v11
         with:
           vcpkgDirectory: C:\vcpkg
-          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          vcpkgGitCommitId: ${{ steps.registry.outputs.commit }}
           doNotCache: false
 
       - name: Install vcpkg dependencies
@@ -182,7 +182,47 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Windows distribution profile validation failed." }
 
       - name: Upload unsigned basic package
-        uses: actions/upload-artifact@master
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: SAKURA-Remote-basic-windows-${{ matrix.job.arch }}
           path: rustdesk
+
+  verify-windows-runtime:
+    if: github.ref == 'refs/heads/rc/verify-1.5.3'
+    needs: build-for-windows-flutter
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: SAKURA-Remote-basic-windows-x86_64
+          path: candidate
+      - name: Test the exact candidate on a clean offline Windows desktop
+        working-directory: candidate
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path ./SAKURA-Remote.exe).Path
+          foreach ($direction in 'Inbound','Outbound') {
+            New-NetFirewallRule -DisplayName "RC test $direction" -Direction $direction -Program $exe -Action Block -Profile Any | Out-Null
+          }
+          if ((Get-Service -Name SAKURA-Remote -ErrorAction SilentlyContinue) -or (Get-Process -Name SAKURA-Remote -ErrorAction SilentlyContinue)) { throw 'Non-clean test runner' }
+          $version = & $exe --version | Out-String
+          if ($LASTEXITCODE -ne 0 -or $version.Trim() -ne '1.5.3') { throw "Unexpected runtime version: $version" }
+          $invalid = Start-Process $exe -ArgumentList '--service-control' -WindowStyle Hidden -Wait -PassThru
+          if ($invalid.ExitCode -ne 160) { throw "Invalid service command returned $($invalid.ExitCode)" }
+          $gui = Start-Process $exe -ArgumentList '--no-server' -PassThru
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(75)
+            do {
+              Start-Sleep -Seconds 1
+              $gui.Refresh()
+              if ($gui.HasExited) { throw "Premature GUI exit: $($gui.ExitCode)" }
+              $ready = $gui.MainWindowHandle -ne 0 -and $gui.MainWindowTitle -eq 'SAKURA-Remote' -and $gui.Responding
+            } until ($ready -or [DateTime]::UtcNow -gt $deadline)
+            if (-not $ready) { throw 'No responsive SAKURA-Remote main window' }
+            Write-Host "PASS: core 1.5.3, service argument guard, responsive branded window. SHA256=$((Get-FileHash $exe).Hash)"
+          } finally {
+            if (-not $gui.HasExited) { $gui.Kill($true); $gui.WaitForExit() }
+          }
