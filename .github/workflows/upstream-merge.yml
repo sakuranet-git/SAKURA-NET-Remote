@@ -171,6 +171,11 @@ jobs:
           git -C libs/hbb_common push origin "${BRANCH}" --force-with-lease
           git push origin "${BRANCH}" --force-with-lease
 
+      - name: Record source-only verification (no deliverable)
+        if: ${{ !inputs.run_remote_pipeline }}
+        run: |
+          echo "Source merge and invariant checks only. No Windows executable was built, no branch was pushed, and no release was dispatched." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Run Windows build and wait for post-build gate
         if: inputs.run_remote_pipeline
         id: build
